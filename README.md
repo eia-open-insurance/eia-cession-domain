@@ -11,7 +11,7 @@
 
 ## Purpose
 
-Cession business rules, transaction catalog, orchestration, approvals, and APIs. Direct-book ceded reinsurance contracts, cession rules, FS-RI hand-off, and recoverables.
+Cession business rules, transaction catalog, orchestration, approvals, and APIs. Primary-book ceded reinsurance contracts, cession rules, FS-RI hand-off, and recoverables.
 
 ## Responsibilities
 
