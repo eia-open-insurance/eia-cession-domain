@@ -1,0 +1,13 @@
+server:
+  port: 8092
+spring:
+  application:
+    name: eia-cession-domain
+eia:
+  cession:
+    expert-url: http://localhost:8091
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
