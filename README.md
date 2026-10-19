@@ -7,7 +7,7 @@
 - Owner: Cession
 - Runtime: Java 22 and Spring Boot
 - Data store: eia_cession (tx schema)
-- Depends on: eia-cession-expert, eia-contracts, eia-open-insurance-libs
+- Depends on: eia-cession-expert, eia-contracts, eia-platform/libs
 
 ## Purpose
 
