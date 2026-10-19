@@ -61,6 +61,6 @@ public class CessionController {
             @Valid @RequestBody TransitionCessionCommand command) {
         UUID tenantId = RequestScope.tenant(tenantHeader);
         RequestScope.requireDirectBook(bookHeader);
-        return service.transition(tenantId, id, command.targetStatus());
+        return service.transition(tenantId, id, command.targetStatus(), command.fsriContractNumber());
     }
 }

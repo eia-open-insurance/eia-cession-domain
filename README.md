@@ -40,13 +40,37 @@ component at `eia.cession.expert-url` (default `http://localhost:8091`).
 | `GET` | `/api/v1/cessions` | List cessions for the caller's tenant |
 | `GET` | `/api/v1/cessions/{id}` | Read one cession |
 | `POST` | `/api/v1/cessions` | Create a cession in `OPEN` |
-| `POST` | `/api/v1/cessions/{id}/transition` | Apply a lifecycle transition |
+| `POST` | `/api/v1/cessions/{id}/transition` | Apply a lifecycle transition; `HANDOFF_PENDING` performs the FS-RI hand-off |
 
 Every request requires `X-EIA-Tenant: <uuid>` and `X-EIA-Book: DIRECT`. A missing or non-`DIRECT`
 book returns a structured `400` (`BOOK_SCOPE_VIOLATION`); unknown records return a structured
 `404`. Amounts are validated as non-negative before the expert is called and the cession lifecycle
 is enforced in the domain (`INVALID_STATUS_TRANSITION`). The web remote relies on the `/api` proxy
 at `/api/v1/cessions`.
+
+### FS-RI hand-off
+
+`POST /api/v1/cessions/{id}/transition` with `{"targetStatus":"HANDOFF_PENDING"}` calls the FS-RI
+simulator before writing any state. `FsriCessionClient` POSTs to
+`/sim/fsri/v1/cessions` (default base URL `http://localhost:8181`) with the SPEC 7.23.2 envelope
+and an `Idempotency-Key` derived from tenant + cession id + transition version. On 2xx the
+acknowledgement is persisted atomically as `HANDED_OFF` and the response exposes
+`fsriHandoffId`, `fsriStatus`, `fsriHandedOffAt`, and `fsriLastError`. On timeout/5xx the call
+returns `503 FSRI_UNAVAILABLE`; 4xx returns `400 FSRI_VALIDATION`/`FSRI_REJECTED` or a structured
+`502`; 409 returns `409 FSRI_CONFLICT`. The case stays retryable and records `fsriLastError`.
+
+`fsriContractNumber` is an optional transition field identifying the contract master FS-RI already
+knows; it defaults to the cession number. For the local simulator, first post
+`repos/eia-quality/simulators/fixtures/fsri-contract.json` (`CES-2026-0001`) and use that value.
+
+```yaml
+eia:
+  fsri:
+    base-url: http://localhost:8181
+    cession-path: /sim/fsri/v1/cessions
+    connect-timeout: 2s
+    read-timeout: 5s
+```
 
 ## Local run
 

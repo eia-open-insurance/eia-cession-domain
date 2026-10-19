@@ -12,6 +12,7 @@ import org.springframework.web.client.RestClient;
 import java.io.IOException;
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
 
@@ -64,7 +65,41 @@ public class CessionClient {
                 .body(CessionDto.class);
     }
 
+    /**
+     * Persist the FS-RI acknowledgement and move the case to HANDED_OFF in one
+     * optimistic, lifecycle-checked write. A 409 is a real concurrency conflict
+     * for this operation, not a caller validation error.
+     */
+    public CessionDto recordHandoff(UUID tenantId, UUID id, HandoffRecord record) {
+        return client.post()
+                .uri(uri -> uri.path("/internal/v1/cessions/{id}/handoff")
+                        .queryParam("tenantId", tenantId).build(id))
+                .body(record)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> translate(response, true))
+                .body(CessionDto.class);
+    }
+
+    /**
+     * Record a failed FS-RI attempt without changing the case status, keeping
+     * the case retryable. The case version is unchanged, so the retry reuses
+     * the same transition version and idempotency key.
+     */
+    public CessionDto recordHandoffFailure(UUID tenantId, UUID id, HandoffFailure failure) {
+        return client.post()
+                .uri(uri -> uri.path("/internal/v1/cessions/{id}/handoff-failure")
+                        .queryParam("tenantId", tenantId).build(id))
+                .body(failure)
+                .retrieve()
+                .onStatus(HttpStatusCode::isError, (request, response) -> translate(response, true))
+                .body(CessionDto.class);
+    }
+
     private void translate(ClientHttpResponse response) throws IOException {
+        translate(response, false);
+    }
+
+    private void translate(ClientHttpResponse response, boolean conflictAsConflict) throws IOException {
         HttpStatus status = HttpStatus.resolve(response.getStatusCode().value());
         ApiError error = readError(response);
         String code = error == null || error.code() == null ? "EXPERT_REJECTED" : error.code();
@@ -76,6 +111,10 @@ public class CessionClient {
             throw DomainException.notFound(message);
         }
         if (status == HttpStatus.CONFLICT) {
+            if (conflictAsConflict) {
+                throw new DomainException(HttpStatus.CONFLICT, code, message,
+                        error == null ? null : error.details());
+            }
             throw DomainException.badRequest("CONFLICT", message);
         }
         if (status != null && status.is4xxClientError()) {
@@ -108,4 +147,16 @@ public class CessionClient {
     ) {}
 
     record StatusRequest(String status, int version) {}
+
+    public record HandoffRecord(
+            int expectedVersion,
+            String fsriHandoffId,
+            String fsriStatus,
+            Instant fsriHandedOffAt
+    ) {}
+
+    public record HandoffFailure(
+            int expectedVersion,
+            String fsriLastError
+    ) {}
 }
