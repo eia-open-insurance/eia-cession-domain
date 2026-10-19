@@ -15,6 +15,7 @@ import java.util.UUID;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -57,12 +58,34 @@ class CessionControllerTest {
     }
 
     @Test
-    void listRejectsRetrocessionBook() throws Exception {
+    void listHidesRetrocessionBookAs404() throws Exception {
         mvc.perform(get("/api/v1/cessions")
                         .header("X-EIA-Tenant", TENANT.toString())
                         .header("X-EIA-Book", "ASSUMED"))
-                .andExpect(status().isBadRequest())
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("BOOK_SCOPE_VIOLATION"))
+                .andExpect(jsonPath("$.message").value("Cession is a DIRECT-only vertical; X-EIA-Book must be DIRECT"));
+    }
+
+    @Test
+    void wrongBookOnCreateReturns404WithoutCallingExpert() throws Exception {
+        mvc.perform(post("/api/v1/cessions")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "ASSUMED")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("""
+                                {
+                                  "policyId": "%s",
+                                  "cessionContractId": "%s",
+                                  "cededPremium": 1000.0000,
+                                  "cededLoss": 250.0000,
+                                  "currency": "USD"
+                                }
+                                """.formatted(POLICY, CONTRACT)))
+                .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.code").value("BOOK_SCOPE_VIOLATION"));
+
+        verifyNoInteractions(client);
     }
 
     @Test
@@ -85,6 +108,20 @@ class CessionControllerTest {
                 .andExpect(jsonPath("$[0].cessionNumber").value("CES-000000001"))
                 .andExpect(jsonPath("$[0].businessBook").value("DIRECT"))
                 .andExpect(jsonPath("$[0].status").value("OPEN"));
+    }
+
+    @Test
+    void moneyFieldsAreSerializedAsDecimalStrings() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(List.of(dto(CessionStatus.OPEN, 0)));
+
+        mvc.perform(get("/api/v1/cessions")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$[0].cededPremium").isString())
+                .andExpect(jsonPath("$[0].cededPremium").value("1000.0000"))
+                .andExpect(jsonPath("$[0].cededLoss").isString())
+                .andExpect(jsonPath("$[0].cededLoss").value("250.0000"));
     }
 
     @Test
