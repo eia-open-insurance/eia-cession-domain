@@ -7,9 +7,12 @@ import org.springframework.stereotype.Service;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.ZoneOffset;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.UUID;
 
 /**
@@ -26,6 +29,11 @@ import java.util.UUID;
  */
 @Service
 public class CessionService {
+    private static final Comparator<CessionDto> LATEST_FIRST =
+            Comparator.comparing(CessionDto::updatedAt,
+                            Comparator.nullsLast(Comparator.reverseOrder()))
+                    .thenComparing(CessionDto::id, Comparator.nullsLast(Comparator.naturalOrder()));
+
     private final CessionClient client;
     private final FsriCessionClient fsriClient;
 
@@ -41,6 +49,27 @@ public class CessionService {
 
     public List<CessionDto> list(UUID tenantId) {
         return client.findAll(tenantId);
+    }
+
+    /**
+     * Shell global-search projection over the DIRECT book. Matching is
+     * case-insensitive and covers the cession number, policy id, and cession
+     * contract id. A blank query returns the most recently updated cessions.
+     */
+    public SearchResult search(UUID tenantId, String query, int limit) {
+        int effectiveLimit = SearchResult.effectiveLimit(limit);
+        String term = query == null ? "" : query.trim();
+        String needle = term.toLowerCase(Locale.ROOT);
+        List<CessionDto> cessions = client.findAll(tenantId);
+        List<SearchResult.Item> items = (cessions == null ? List.<CessionDto>of() : cessions).stream()
+                .filter(Objects::nonNull)
+                .filter(cession -> tenantId.equals(cession.tenantId()))
+                .filter(cession -> matches(cession, needle))
+                .sorted(LATEST_FIRST)
+                .limit(effectiveLimit)
+                .map(CessionService::searchItem)
+                .toList();
+        return new SearchResult(term, effectiveLimit, items);
     }
 
     public CessionDto get(UUID tenantId, UUID id) {
@@ -163,6 +192,29 @@ public class CessionService {
             return "FS-RI hand-off failed";
         }
         return value.length() <= 1000 ? value : value.substring(0, 1000);
+    }
+
+    private static boolean matches(CessionDto cession, String needle) {
+        return needle.isEmpty()
+                || contains(cession.cessionNumber(), needle)
+                || contains(cession.policyId(), needle)
+                || contains(cession.cessionContractId(), needle);
+    }
+
+    private static boolean contains(Object value, String needle) {
+        return value != null && value.toString().toLowerCase(Locale.ROOT).contains(needle);
+    }
+
+    private static SearchResult.Item searchItem(CessionDto cession) {
+        String status = cession.status() == null ? null : cession.status().name();
+        String book = cession.businessBook() == null ? "DIRECT" : cession.businessBook();
+        return new SearchResult.Item(
+                cession.id(),
+                "CESSION",
+                cession.cessionNumber(),
+                SearchResult.secondary(book, status),
+                status,
+                "/cession?record=" + cession.id());
     }
 
     private static void requireNonNegative(String field, BigDecimal amount) {

@@ -10,6 +10,7 @@ import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
@@ -340,5 +341,181 @@ class CessionControllerTest {
                         .header("X-EIA-Book", "DIRECT"))
                 .andExpect(status().isServiceUnavailable())
                 .andExpect(jsonPath("$.code").value("EXPERT_UNAVAILABLE"));
+    }
+
+    // ------------------------------------------------------------- search
+
+    private static final UUID OTHER_TENANT = UUID.fromString("99999999-9999-7999-8999-999999999999");
+    private static final UUID OTHER_POLICY = UUID.fromString("aaaaaaaa-aaaa-7aaa-8aaa-aaaaaaaaaaaa");
+    private static final UUID OTHER_CONTRACT = UUID.fromString("bbbbbbbb-bbbb-7bbb-8bbb-bbbbbbbbbbbb");
+
+    private static CessionDto searchCession(UUID id, UUID tenantId, String number, UUID policyId,
+                                            UUID contractId, CessionStatus status, Instant updatedAt) {
+        return new CessionDto(id, tenantId, "DIRECT", number, policyId, contractId, status,
+                new BigDecimal("1000.0000"), new BigDecimal("250.0000"), "USD", 0,
+                updatedAt, updatedAt);
+    }
+
+    private static List<CessionDto> latestCessions(int count) {
+        List<CessionDto> cessions = new ArrayList<>();
+        for (int index = 0; index < count; index++) {
+            cessions.add(searchCession(new UUID(0, index + 1), TENANT,
+                    String.format("CES-2026-%04d", index), POLICY, CONTRACT, CessionStatus.OPEN,
+                    HANDED_OFF_AT.plusSeconds(index * 60L)));
+        }
+        return cessions;
+    }
+
+    @Test
+    void searchMatchesCessionNumberAndReturnsTheShellShape() throws Exception {
+        CessionDto match = searchCession(new UUID(0, 1), TENANT, "CES-2026-0001", POLICY, CONTRACT,
+                CessionStatus.OPEN, HANDED_OFF_AT);
+        CessionDto other = searchCession(new UUID(0, 2), TENANT, "CES-2026-0002", OTHER_POLICY,
+                OTHER_CONTRACT, CessionStatus.CONFIRMED, HANDED_OFF_AT.plusSeconds(60));
+        when(client.findAll(TENANT)).thenReturn(List.of(match, other));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "ces-2026-0001")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.query").value("ces-2026-0001"))
+                .andExpect(jsonPath("$.limit").value(10))
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(match.id().toString()))
+                .andExpect(jsonPath("$.items[0].type").value("CESSION"))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0001"))
+                .andExpect(jsonPath("$.items[0].secondary").value("DIRECT · OPEN"))
+                .andExpect(jsonPath("$.items[0].status").value("OPEN"))
+                .andExpect(jsonPath("$.items[0].href").value("/cession?record=" + match.id()));
+    }
+
+    @Test
+    void searchMatchesPolicyId() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(List.of(
+                searchCession(new UUID(0, 1), TENANT, "CES-2026-0001", POLICY, CONTRACT,
+                        CessionStatus.OPEN, HANDED_OFF_AT),
+                searchCession(new UUID(0, 2), TENANT, "CES-2026-0002", OTHER_POLICY, OTHER_CONTRACT,
+                        CessionStatus.OPEN, HANDED_OFF_AT)));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "33333333-3333")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0001"));
+    }
+
+    @Test
+    void searchMatchesCessionContractId() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(List.of(
+                searchCession(new UUID(0, 1), TENANT, "CES-2026-0001", POLICY, CONTRACT,
+                        CessionStatus.OPEN, HANDED_OFF_AT),
+                searchCession(new UUID(0, 2), TENANT, "CES-2026-0002", OTHER_POLICY, OTHER_CONTRACT,
+                        CessionStatus.OPEN, HANDED_OFF_AT)));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "44444444-4444")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0001"));
+    }
+
+    @Test
+    void blankSearchReturnsTheLatestTenByUpdatedAt() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(latestCessions(12));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "  ")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.query").value(""))
+                .andExpect(jsonPath("$.limit").value(10))
+                .andExpect(jsonPath("$.items.length()").value(10))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0011"))
+                .andExpect(jsonPath("$.items[9].label").value("CES-2026-0002"));
+    }
+
+    @Test
+    void searchHonoursAnExplicitLimit() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(latestCessions(8));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "CES")
+                        .param("limit", "3")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limit").value(3))
+                .andExpect(jsonPath("$.items.length()").value(3))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0007"));
+    }
+
+    @Test
+    void searchClampsLimitToTwentyFive() throws Exception {
+        when(client.findAll(TENANT)).thenReturn(latestCessions(30));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "CES")
+                        .param("limit", "100")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.limit").value(25))
+                .andExpect(jsonPath("$.items.length()").value(25))
+                .andExpect(jsonPath("$.items[0].label").value("CES-2026-0029"));
+    }
+
+    @Test
+    void searchIsTenantScoped() throws Exception {
+        CessionDto mine = searchCession(new UUID(0, 1), TENANT, "CES-2026-0001", POLICY, CONTRACT,
+                CessionStatus.OPEN, HANDED_OFF_AT);
+        CessionDto foreign = searchCession(new UUID(0, 2), OTHER_TENANT, "CES-2026-0002", POLICY, CONTRACT,
+                CessionStatus.OPEN, HANDED_OFF_AT.plusSeconds(60));
+        when(client.findAll(TENANT)).thenReturn(List.of(mine, foreign));
+
+        mvc.perform(get("/api/v1/cessions/search")
+                        .param("q", "CES-2026")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.items.length()").value(1))
+                .andExpect(jsonPath("$.items[0].id").value(mine.id().toString()));
+
+        verify(client).findAll(TENANT);
+    }
+
+    @Test
+    void searchRequiresTenantHeader() throws Exception {
+        mvc.perform(get("/api/v1/cessions/search").header("X-EIA-Book", "DIRECT"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("TENANT_REQUIRED"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void searchRequiresTheDirectBook() throws Exception {
+        mvc.perform(get("/api/v1/cessions/search")
+                        .header("X-EIA-Tenant", TENANT.toString()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value("BOOK_REQUIRED"));
+
+        verifyNoInteractions(client);
+    }
+
+    @Test
+    void searchHidesTheAssumedBookAs404() throws Exception {
+        mvc.perform(get("/api/v1/cessions/search")
+                        .header("X-EIA-Tenant", TENANT.toString())
+                        .header("X-EIA-Book", "ASSUMED"))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.code").value("BOOK_SCOPE_VIOLATION"));
+
+        verifyNoInteractions(client);
     }
 }

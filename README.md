@@ -38,15 +38,20 @@ component at `eia.cession.expert-url` (default `http://localhost:8091`).
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/api/v1/cessions` | List cessions for the caller's tenant |
+| `GET` | `/api/v1/cessions/search?q=&limit=` | Shell global search over the cession number, policy id, and cession contract id |
 | `GET` | `/api/v1/cessions/{id}` | Read one cession |
 | `POST` | `/api/v1/cessions` | Create a cession in `OPEN` |
 | `POST` | `/api/v1/cessions/{id}/transition` | Apply a lifecycle transition; `HANDOFF_PENDING` performs the FS-RI hand-off |
 
-Every request requires `X-EIA-Tenant: <uuid>` and `X-EIA-Book: DIRECT`. A missing or non-`DIRECT`
-book returns a structured `400` (`BOOK_SCOPE_VIOLATION`); unknown records return a structured
-`404`. Amounts are validated as non-negative before the expert is called and the cession lifecycle
-is enforced in the domain (`INVALID_STATUS_TRANSITION`). The web remote relies on the `/api` proxy
-at `/api/v1/cessions`.
+Every request requires `X-EIA-Tenant: <uuid>` and `X-EIA-Book: DIRECT`. A missing book returns a
+structured `400` (`BOOK_REQUIRED`); a non-`DIRECT` book returns a structured `404`
+(`BOOK_SCOPE_VIOLATION`) and unknown records return a structured `404`. Amounts are validated as
+non-negative before the expert is called and the cession lifecycle is enforced in the domain
+(`INVALID_STATUS_TRANSITION`). The web remote relies on the `/api` proxy at `/api/v1/cessions`.
+
+`GET /api/v1/cessions/search` returns the common shell projection (`query`, `limit`, `items[]`
+with `id`, `type`, `label`, `secondary`, `status`, `href`), is tenant-scoped, caps `limit` at 25,
+and returns the latest cases by `updatedAt` when `q` is blank.
 
 ### FS-RI hand-off
 
